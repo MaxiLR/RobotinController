@@ -1,10 +1,12 @@
 /*
-  Control de Automóvil con ESP32 y Sensor de Distancia HC-SR04
-  ============================================================
+  Control de Automóvil con ESP32, MCPWM y Sensor de Distancia HC-SR04
+  ==================================================================
 
   Este sketch permite controlar un automóvil mediante una interfaz web alojada en el ESP32.
-  Además, integra un sensor de distancia HC-SR04 para detectar obstáculos y detener el automóvil
-  automáticamente si se encuentra un objeto demasiado cerca.
+  Integra un sensor de distancia HC-SR04 para detectar obstáculos y detener el automóvil
+  automáticamente si se encuentra un objeto demasiado cerca. Además, implementa
+  un control de velocidad en las ruedas utilizando el módulo MCPWM para asegurar que
+  ambas ruedas operen a la misma velocidad, evitando desviaciones en la trayectoria.
 
   Componentes:
   - ESP32 Development Board
@@ -21,18 +23,25 @@
 #include <WebServer.h>
 #include "driver/mcpwm.h"
 
+// ======================
+// 🛠️ Configuración
+// ======================
+
 // ----- Credenciales de WiFi -----
 const char* ssid = "RobotinMS";      // Nombre de la red WiFi creada por la ESP32
 const char* password = "12345678";   // Contraseña de la red WiFi
 
 // ----- Pines de los Motores -----
 
-// Right Wheel
-#define B1A 5
-#define B2A 2
-// Left Wheel
-#define A1B 4
-#define A1A 18
+// Right Wheel (Rueda Derecha)
+#define B1A 5                    // Dirección 1
+#define B2A 2                    // Dirección 2
+#define RIGHT_PWM GPIO_NUM_12    // PWM para la Rueda Derecha
+
+// Left Wheel (Rueda Izquierda)
+#define A1B 4                    // Dirección 1
+#define A1A 18                   // Dirección 2
+#define LEFT_PWM GPIO_NUM_13     // PWM para la Rueda Izquierda
 
 // ----- Pines del Sensor de Distancia -----
 #define ECHO 19
@@ -43,53 +52,128 @@ const float SPEED_OF_SOUND = 0.0343;  // cm/µs
 const int MAX_DISTANCE = 200;         // Distancia máxima a detectar en cm
 const int OBSTACLE_THRESHOLD = 20;    // Umbral para detener el automóvil en cm
 
+// ----- Parámetros de Control de Velocidad -----
+const float DEFAULT_SPEED = 50.0;     // Velocidad por defecto en porcentaje (0-100)
+const float MAX_SPEED = 100.0;        // Velocidad máxima
+const float MIN_SPEED = 0.0;          // Velocidad mínima
+
+// ----- Parámetros de MCPWM -----
+#define MCPWM_UNIT MCPWM_UNIT_0
+#define MCPWM_TIMER_RIGHT MCPWM_TIMER_0
+#define MCPWM_TIMER_LEFT MCPWM_TIMER_1
+#define MCPWM_GPIO_RIGHT_RIGHTPWM RIGHT_PWM
+#define MCPWM_GPIO_LEFT_LEFTPWM LEFT_PWM
+
 // ----- Parámetros de Control -----
 bool obstacleDetected = false;
+float currentSpeed = DEFAULT_SPEED;
 
+// ======================
+// 🔧 Variables
+// ======================
 WebServer server(80);
 
+// ======================
+// 📡 Funciones de Control del Automóvil
+// ======================
+
+/**
+ * Configura MCPWM para una rueda específica.
+ * @param timer_num Número del timer MCPWM.
+ * @param gpio_num Número del GPIO para PWM.
+ */
+void setupMCPWM(mcpwm_timer_t timer_num, gpio_num_t gpio_num) {
+  mcpwm_gpio_init(MCPWM_UNIT, (timer_num == MCPWM_TIMER_0) ? MCPWM0A : MCPWM1A, gpio_num);
+
+  mcpwm_config_t pwm_config;
+  pwm_config.frequency = 1000;    // Frecuencia PWM en Hz
+  pwm_config.cmpr_a = 0;          // Ciclo de trabajo inicial para la salida A
+  pwm_config.cmpr_b = 0;          // Ciclo de trabajo inicial para la salida B
+  pwm_config.counter_mode = MCPWM_UP_COUNTER;
+  pwm_config.duty_mode = MCPWM_DUTY_MODE_0;
+
+  mcpwm_init(MCPWM_UNIT, timer_num, &pwm_config);
+}
+
+/**
+ * Establece el ciclo de trabajo PWM para una rueda.
+ * @param timer_num Número del timer MCPWM.
+ * @param duty Ciclo de trabajo en porcentaje (0-100).
+ */
+void setPWMDuty(mcpwm_timer_t timer_num, float duty) {
+  mcpwm_set_duty(MCPWM_UNIT, timer_num, MCPWM_OPR_A, duty);
+  mcpwm_set_duty_type(MCPWM_UNIT, timer_num, MCPWM_OPR_A, MCPWM_DUTY_MODE_0);
+}
+
+// Funciones de movimiento
 void Adelante() {
   Serial.println("Adelante");
+  // Configurar direcciones
   digitalWrite(B1A, LOW);
   digitalWrite(B2A, HIGH);
-  delay(50);
   digitalWrite(A1B, LOW);
   digitalWrite(A1A, HIGH);
+
+  // Establecer velocidad
+  setPWMDuty(MCPWM_TIMER_RIGHT, currentSpeed);
+  setPWMDuty(MCPWM_TIMER_LEFT, currentSpeed);
 }
 
 void Atras() {
   Serial.println("Atras");
+  // Configurar direcciones
   digitalWrite(B1A, HIGH);
   digitalWrite(B2A, LOW);
-  delay(50);
   digitalWrite(A1B, HIGH);
   digitalWrite(A1A, LOW);
+
+  // Establecer velocidad
+  setPWMDuty(MCPWM_TIMER_RIGHT, currentSpeed);
+  setPWMDuty(MCPWM_TIMER_LEFT, currentSpeed);
 }
 
 void Derecha() {
   Serial.println("Derecha");
+  // Configurar direcciones para girar a la derecha
   digitalWrite(B1A, LOW);
   digitalWrite(B2A, LOW);
   digitalWrite(A1B, LOW);
   digitalWrite(A1A, HIGH);
+
+  // Establecer velocidad
+  setPWMDuty(MCPWM_TIMER_RIGHT, currentSpeed / 2); // Rueda derecha más lenta
+  setPWMDuty(MCPWM_TIMER_LEFT, currentSpeed);       // Rueda izquierda a velocidad normal
 }
 
 void Izquierda() {
   Serial.println("Izquierda");
+  // Configurar direcciones para girar a la izquierda
   digitalWrite(B1A, LOW);
   digitalWrite(B2A, HIGH);
   digitalWrite(A1B, LOW);
   digitalWrite(A1A, LOW);
+
+  // Establecer velocidad
+  setPWMDuty(MCPWM_TIMER_RIGHT, currentSpeed);       // Rueda derecha a velocidad normal
+  setPWMDuty(MCPWM_TIMER_LEFT, currentSpeed / 2);    // Rueda izquierda más lenta
 }
 
 void Detener() {
   Serial.println("Detenido");
+  // Detener motores
   digitalWrite(B1A, LOW);
   digitalWrite(B2A, LOW);
   digitalWrite(A1B, LOW);
   digitalWrite(A1A, LOW);
+
+  // Establecer ciclo de trabajo PWM a 0%
+  setPWMDuty(MCPWM_TIMER_RIGHT, 0);
+  setPWMDuty(MCPWM_TIMER_LEFT, 0);
 }
 
+// ======================
+// 📡 Funciones del Servidor Web
+// ======================
 
 void handleRoot() {
   server.send(200, "text/html", 
@@ -187,11 +271,11 @@ void handleAdelante() {
 }
 
 void handleAtras() {
-  Atras();
-  server.send(200, "text/plain", "Moviendo atrás");
+    Atras();
+    server.send(200, "text/plain", "Moviendo atrás");
 }
 
-void handleDerecha() {p
+void handleDerecha() {
   if (!obstacleDetected) {
     Derecha();
     server.send(200, "text/plain", "Girando a la derecha");
@@ -218,6 +302,10 @@ void handleDistance() {
   float distance = getDistance();
   server.send(200, "text/plain", String(distance));
 }
+
+// ======================
+// 📡 Funciones del Sensor de Distancia
+// ======================
 
 /**
  * Activar el sensor HC-SR04 para medir la distancia
@@ -256,6 +344,9 @@ float getDistance() {
   return distance;
 }
 
+// ======================
+// 📡 Setup
+// ======================
 void setup() {
   Serial.begin(115200);
   
@@ -272,6 +363,10 @@ void setup() {
   // Asegurarse de que el TRIG esté LOW
   digitalWrite(TRIG, LOW);
   delayMicroseconds(2);
+
+  // Configurar MCPWM para ambas ruedas
+  setupMCPWM(MCPWM_TIMER_RIGHT, MCPWM_GPIO_RIGHT_RIGHTPWM);
+  setupMCPWM(MCPWM_TIMER_LEFT, MCPWM_GPIO_LEFT_LEFTPWM);
 
   // Configurar la ESP32 como Access Point
   WiFi.softAP(ssid, password);
@@ -300,6 +395,10 @@ void setup() {
   Serial.println("Servidor iniciado");
 }
 
+// ======================
+// 📡 Loop
+// ======================
 void loop() {
   server.handleClient();
+  // Puedes agregar más lógica aquí si es necesario
 }
