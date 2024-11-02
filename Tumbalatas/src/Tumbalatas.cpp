@@ -1,4 +1,5 @@
 #include "driver/mcpwm.h"
+#include <Arduino.h>
 #include <WebServer.h>
 #include <WiFi.h>
 
@@ -18,14 +19,13 @@ const char *password = "12345678";
 // ----- Pines del Sensor de Distancia -----
 #define ECHO 19
 #define TRIG 21
-
-// ----- Pin del Sensor Infrarrojo -----
-#define INFRARED 25
-
-// ----- Parámetros del Sensor de Distancia -----
 const float SPEED_OF_SOUND = 0.0343; // cm/µs
 const int MAX_DISTANCE = 200;        // Distancia máxima a detectar en cm
 const int OBSTACLE_THRESHOLD = 60;   // Umbral para detener el automóvil en cm
+
+// ----- Pin del Sensor Infrarrojo -----
+#define INFRARED 32
+const int COLOR_THRESHOLD = 50;
 
 // ----- Estados del Tumbalatas -----
 #define ESCANEANDO 0
@@ -35,10 +35,25 @@ const int OBSTACLE_THRESHOLD = 60;   // Umbral para detener el automóvil en cm
 
 // ----- Inicializacion de Variables Globales -----
 float distance = 0;
-int color = 255;
+bool color = false;
 int state = DETENIDO;
+int retroCounter = 0;
 
 WebServer server(80);
+
+// ----- Declaracion de Funciones -----
+void Adelante();
+void Atras();
+void Derecha();
+void Izquierda();
+void GirarEnElLugar();
+void Detener();
+void handleRoot();
+void handleIniciar();
+void handleDetener();
+void handleDistance();
+void handleColor();
+float getDistance();
 
 void Adelante() {
   Serial.println("Adelante");
@@ -241,13 +256,13 @@ void handleRoot() {
 }
 
 void handleDistance() {
-  // distance = getDistance();
+  distance = getDistance();
   server.send(200, "text/plain", String(distance));
 }
 
 void handleColor() {
-  // color = analogRead(INFRARED);
-  server.send(200, "text/plain", String(color));
+  color = analogRead(INFRARED) <= COLOR_THRESHOLD ? 1 : 0;
+  server.send(200, "text/plain", color ? "Blanco" : "Negro");
 }
 
 void handleIniciar() {
@@ -315,32 +330,34 @@ void setup() {
 void loop() {
   server.handleClient();
 
-  Serial.println("Distancia: " + String(distance));
-  Serial.println("Color: " + analogRead(INFRARED));
-
-  // switch (state) {
-  // case ESCANEANDO:
-  //   if (distance <= OBSTACLE_THRESHOLD) {
-  //     state = AVANZANDO;
-  //   } else {
-  //     GirarEnElLugar();
-  //   }
-  //   break;
-  // case AVANZANDO:
-  //   color = analogRead(INFRARED);
-  //   if (!color) {
-  //     Adelante();
-  //   } else {
-  //     state = RETROCEDIENDO;
-  //   }
-  //   break;
-  // case RETROCEDIENDO:
-  //   Atras();
-  //   break;
-  // case DETENIDO:
-  //   Detener();
-  //   break;
-  // default:
-  //   break;
-  // }
+  switch (state) {
+  case ESCANEANDO:
+    if (distance <= OBSTACLE_THRESHOLD) {
+      state = AVANZANDO;
+    } else {
+      GirarEnElLugar();
+    }
+    break;
+  case AVANZANDO:
+    if (!color) {
+      Adelante();
+    } else {
+      state = RETROCEDIENDO;
+    }
+    break;
+  case RETROCEDIENDO:
+    Atras();
+    delay(1000);
+    retroCounter++;
+    if (retroCounter == 2) {
+      state = ESCANEANDO;
+      retroCounter = 0;
+    }
+    break;
+  case DETENIDO:
+    Detener();
+    break;
+  default:
+    break;
+  }
 }
