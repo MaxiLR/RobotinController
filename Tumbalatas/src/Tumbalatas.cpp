@@ -34,9 +34,9 @@ const int COLOR_THRESHOLD = 50;
 #define DETENIDO 3
 
 // ----- Inicializacion de Variables Globales -----
-float distance = 0;
+float distance = OBSTACLE_THRESHOLD + 1;
 bool color = false;
-int state = DETENIDO;
+int state = ESCANEANDO;
 int retroCounter = 0;
 
 WebServer server(80);
@@ -56,7 +56,6 @@ void handleColor();
 float getDistance();
 
 void Adelante() {
-  Serial.println("Adelante");
   digitalWrite(B1A, LOW);
   digitalWrite(B2A, HIGH);
   digitalWrite(A1B, LOW);
@@ -64,7 +63,6 @@ void Adelante() {
 }
 
 void Atras() {
-  Serial.println("Atras");
   digitalWrite(B1A, HIGH);
   digitalWrite(B2A, LOW);
   digitalWrite(A1B, HIGH);
@@ -72,7 +70,6 @@ void Atras() {
 }
 
 void Derecha() {
-  Serial.println("Derecha");
   digitalWrite(B1A, LOW);
   digitalWrite(B2A, LOW);
   digitalWrite(A1B, LOW);
@@ -80,7 +77,6 @@ void Derecha() {
 }
 
 void Izquierda() {
-  Serial.println("Izquierda");
   digitalWrite(B1A, LOW);
   digitalWrite(B2A, HIGH);
   digitalWrite(A1B, LOW);
@@ -88,7 +84,6 @@ void Izquierda() {
 }
 
 void Detener() {
-  Serial.println("Detenido");
   digitalWrite(B1A, LOW);
   digitalWrite(B2A, LOW);
   digitalWrite(A1B, LOW);
@@ -96,7 +91,6 @@ void Detener() {
 }
 
 void GirarEnElLugar() {
-  Serial.println("Girar en el lugar");
   digitalWrite(B1A, LOW);
   digitalWrite(B2A, HIGH);
   digitalWrite(A1B, HIGH);
@@ -255,13 +249,9 @@ void handleRoot() {
       "</html>");
 }
 
-void handleDistance() {
-  distance = getDistance();
-  server.send(200, "text/plain", String(distance));
-}
+void handleDistance() { server.send(200, "text/plain", String(distance)); }
 
 void handleColor() {
-  color = analogRead(INFRARED) <= COLOR_THRESHOLD ? 1 : 0;
   server.send(200, "text/plain", color ? "Blanco" : "Negro");
 }
 
@@ -328,7 +318,17 @@ void setup() {
 }
 
 void loop() {
-  server.handleClient();
+  // server.handleClient();
+
+  distance = getDistance();
+  color = analogRead(INFRARED) <= COLOR_THRESHOLD ? 1 : 0;
+
+  Serial.print("Distancia: ");
+  Serial.println(distance);
+  Serial.print("Color: ");
+  Serial.println(color);
+  Serial.print("Estado: ");
+  Serial.println(state);
 
   switch (state) {
   case ESCANEANDO:
@@ -349,7 +349,7 @@ void loop() {
     Atras();
     delay(1000);
     retroCounter++;
-    if (retroCounter == 2) {
+    if (retroCounter == 1) {
       state = ESCANEANDO;
       retroCounter = 0;
     }
@@ -360,4 +360,6 @@ void loop() {
   default:
     break;
   }
+
+  delay(10);
 }
