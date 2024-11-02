@@ -1,11 +1,10 @@
-#include "driver/mcpwm.h"
-#include <Arduino.h>
+#include <ArduinoOTA.h>
 #include <WebServer.h>
 #include <WiFi.h>
 
 // ----- Credenciales de WiFi -----
-const char *ssid = "RobotinMS";
-const char *password = "12345678";
+const char *ssid = "WIFI-QM";      // Network SSID
+const char *password = "159Retys"; // Network Password
 
 // ----- Pines de los Motores -----
 // Right Wheel
@@ -19,8 +18,8 @@ const char *password = "12345678";
 #define ECHO 19
 #define TRIG 21
 const float SPEED_OF_SOUND = 0.0343; // cm/µs
-const int MAX_DISTANCE = 200;        // Distancia máxima a detectar en cm
-const int OBSTACLE_THRESHOLD = 60;   // Umbral para detener el automóvil en cm
+const int MAX_DISTANCE = 200;        // Max distance to detect in cm
+const int OBSTACLE_THRESHOLD = 60;   // Threshold to stop the vehicle in cm
 
 // ----- Pin del Sensor Infrarrojo -----
 #define INFRARED 32
@@ -38,7 +37,7 @@ bool color = false;
 int state = DETENIDO;
 int retroCounter = 0;
 
-WebServer server(80);
+WebServer server(80); // Create a web server on port 80
 
 // ----- Declaracion de Funciones -----
 void Adelante();
@@ -56,6 +55,88 @@ float getDistance();
 void stateMachineTask(void *parameter);
 void webServerTask(void *parameter);
 
+void setup() {
+  Serial.begin(115200);
+
+  // Connect to Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  // OTA setup
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch"; // Update sketch
+    } else {
+      type = "filesystem"; // Update SPIFFS
+    }
+    Serial.println("Start updating " + type);
+  });
+
+  ArduinoOTA.onEnd([]() { Serial.println("End update"); });
+
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if (error == OTA_AUTH_ERROR) {
+      Serial.println("Auth Failed");
+    } else if (error == OTA_BEGIN_ERROR) {
+      Serial.println("Begin Failed");
+    } else if (error == OTA_CONNECT_ERROR) {
+      Serial.println("Connect Failed");
+    } else if (error == OTA_RECEIVE_ERROR) {
+      Serial.println("Receive Failed");
+    } else if (error == OTA_END_ERROR) {
+      Serial.println("End Failed");
+    }
+  });
+
+  ArduinoOTA.begin(); // Initialize OTA
+
+  // Set up motor pins
+  pinMode(A1A, OUTPUT);
+  pinMode(A1B, OUTPUT);
+  pinMode(B1A, OUTPUT);
+  pinMode(B2A, OUTPUT);
+
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+
+  // Set up web server routes
+  server.on("/", handleRoot);
+  server.on("/iniciar", handleIniciar);
+  server.on("/detener", handleDetener);
+  server.on("/distance", handleDistance);
+  server.on("/color", handleColor);
+
+  server.onNotFound([]() { server.send(404, "text/plain", "404: Not Found"); });
+
+  server.begin(); // Start the server
+  Serial.println("Server started");
+
+  // Create tasks
+  xTaskCreate(webServerTask, "WebServerTask", 2048, NULL, 1, NULL);
+  xTaskCreate(stateMachineTask, "StateMachineTask", 2048, NULL, 1, NULL);
+}
+
+void loop() {
+  ArduinoOTA.handle();   // Handle OTA requests
+  server.handleClient(); // Handle incoming client requests
+}
+
+// Motor control functions
 void Adelante() {
   digitalWrite(B1A, LOW);
   digitalWrite(B2A, HIGH);
@@ -250,7 +331,7 @@ void handleRoot() {
       "</html>");
 }
 
-void handleDistance() { server.send(200, "text/plain", String(distance)); }
+void handleDistance() { server.send(200, "text/plain", String(getDistance())); }
 
 void handleColor() {
   server.send(200, "text/plain", color ? "Blanco" : "Negro");
@@ -269,13 +350,11 @@ void handleDetener() {
 float getDistance() {
   digitalWrite(TRIG, LOW);
   delayMicroseconds(2);
-
   digitalWrite(TRIG, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG, LOW);
 
   long duration = pulseIn(ECHO, HIGH, 30000);
-
   float distance = (duration / 2.0) * SPEED_OF_SOUND;
 
   if (duration == 0) {
@@ -288,7 +367,7 @@ float getDistance() {
 void webServerTask(void *parameter) {
   while (true) {
     server.handleClient();
-    delay(10); // Add a small delay to avoid high CPU usage
+    delay(10); // Avoid high CPU usage
   }
 }
 
@@ -323,7 +402,7 @@ void stateMachineTask(void *parameter) {
       Atras();
       delay(1000);
       retroCounter++;
-      if (retroCounter == 1) {
+      if (retroCounter == 2) {
         state = ESCANEANDO;
         retroCounter = 0;
       }
@@ -335,45 +414,6 @@ void stateMachineTask(void *parameter) {
       break;
     }
 
-    delay(10); // Add a small delay to avoid high CPU usage
+    delay(10); // Avoid high CPU usage
   }
 }
-
-void setup() {
-  Serial.begin(115200);
-
-  pinMode(A1A, OUTPUT);
-  pinMode(A1B, OUTPUT);
-  pinMode(B1A, OUTPUT);
-  pinMode(B2A, OUTPUT);
-
-  pinMode(TRIG, OUTPUT);
-  pinMode(ECHO, INPUT);
-
-  digitalWrite(TRIG, LOW);
-  delayMicroseconds(2);
-
-  WiFi.softAP(ssid, password);
-  Serial.println("Access Point iniciado");
-
-  IPAddress IP = WiFi.softAPIP();
-  Serial.print("IP del servidor: ");
-  Serial.println(IP);
-
-  server.on("/", handleRoot);
-  server.on("/iniciar", handleIniciar);
-  server.on("/detener", handleDetener);
-  server.on("/distance", handleDistance);
-  server.on("/color", handleColor);
-
-  server.onNotFound([]() { server.send(404, "text/plain", "404: Not Found"); });
-
-  server.begin();
-  Serial.println("Servidor iniciado");
-
-  // Create tasks
-  xTaskCreate(webServerTask, "WebServerTask", 2048, NULL, 1, NULL);
-  xTaskCreate(stateMachineTask, "StateMachineTask", 2048, NULL, 1, NULL);
-}
-
-void loop() {}
