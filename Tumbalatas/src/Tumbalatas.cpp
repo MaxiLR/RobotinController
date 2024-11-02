@@ -8,7 +8,6 @@ const char *ssid = "RobotinMS";
 const char *password = "12345678";
 
 // ----- Pines de los Motores -----
-
 // Right Wheel
 #define B1A 5
 #define B2A 2
@@ -36,7 +35,7 @@ const int COLOR_THRESHOLD = 50;
 // ----- Inicializacion de Variables Globales -----
 float distance = OBSTACLE_THRESHOLD + 1;
 bool color = false;
-int state = ESCANEANDO;
+int state = DETENIDO;
 int retroCounter = 0;
 
 WebServer server(80);
@@ -54,6 +53,8 @@ void handleDetener();
 void handleDistance();
 void handleColor();
 float getDistance();
+void stateMachineTask(void *parameter);
+void webServerTask(void *parameter);
 
 void Adelante() {
   digitalWrite(B1A, LOW);
@@ -217,7 +218,7 @@ void handleRoot() {
       "    document.getElementById('status').innerText = 'Error al iniciar.';"
       "    console.error('Error:', error);"
       "  });"
-      "}"
+      "} "
       "function detener() {"
       "  fetch('/detener').then(response => response.text()).then(data => {"
       "    document.getElementById('status').innerText = data;"
@@ -225,7 +226,7 @@ void handleRoot() {
       "    document.getElementById('status').innerText = 'Error al detener.';"
       "    console.error('Error:', error);"
       "  });"
-      "}"
+      "} "
       "function updateDistance() {"
       "  fetch('/distance').then(response => response.text()).then(data => {"
       "    document.getElementById('distance').innerText = data;"
@@ -233,7 +234,7 @@ void handleRoot() {
       "    document.getElementById('distance').innerText = '--';"
       "    console.error('Error:', error);"
       "  });"
-      "}"
+      "} "
       "function updateColor() {"
       "  fetch('/color').then(response => response.text()).then(data => {"
       "    document.getElementById('color').innerText = data;"
@@ -241,7 +242,7 @@ void handleRoot() {
       "    document.getElementById('color').innerText = '--';"
       "    console.error('Error:', error);"
       "  });"
-      "}"
+      "} "
       "setInterval(updateDistance, 1000);"
       "setInterval(updateColor, 1000);"
       "</script>"
@@ -284,6 +285,60 @@ float getDistance() {
   return distance;
 }
 
+void webServerTask(void *parameter) {
+  while (true) {
+    server.handleClient();
+    delay(10); // Add a small delay to avoid high CPU usage
+  }
+}
+
+void stateMachineTask(void *parameter) {
+  while (true) {
+    distance = getDistance();
+    color = analogRead(INFRARED) <= COLOR_THRESHOLD ? 1 : 0;
+
+    Serial.print("Distancia: ");
+    Serial.println(distance);
+    Serial.print("Color: ");
+    Serial.println(color);
+    Serial.print("Estado: ");
+    Serial.println(state);
+
+    switch (state) {
+    case ESCANEANDO:
+      if (distance <= OBSTACLE_THRESHOLD) {
+        state = AVANZANDO;
+      } else {
+        GirarEnElLugar();
+      }
+      break;
+    case AVANZANDO:
+      if (!color) {
+        Adelante();
+      } else {
+        state = RETROCEDIENDO;
+      }
+      break;
+    case RETROCEDIENDO:
+      Atras();
+      delay(1000);
+      retroCounter++;
+      if (retroCounter == 1) {
+        state = ESCANEANDO;
+        retroCounter = 0;
+      }
+      break;
+    case DETENIDO:
+      Detener();
+      break;
+    default:
+      break;
+    }
+
+    delay(10); // Add a small delay to avoid high CPU usage
+  }
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -315,51 +370,10 @@ void setup() {
 
   server.begin();
   Serial.println("Servidor iniciado");
+
+  // Create tasks
+  xTaskCreate(webServerTask, "WebServerTask", 2048, NULL, 1, NULL);
+  xTaskCreate(stateMachineTask, "StateMachineTask", 2048, NULL, 1, NULL);
 }
 
-void loop() {
-  // server.handleClient();
-
-  distance = getDistance();
-  color = analogRead(INFRARED) <= COLOR_THRESHOLD ? 1 : 0;
-
-  Serial.print("Distancia: ");
-  Serial.println(distance);
-  Serial.print("Color: ");
-  Serial.println(color);
-  Serial.print("Estado: ");
-  Serial.println(state);
-
-  switch (state) {
-  case ESCANEANDO:
-    if (distance <= OBSTACLE_THRESHOLD) {
-      state = AVANZANDO;
-    } else {
-      GirarEnElLugar();
-    }
-    break;
-  case AVANZANDO:
-    if (!color) {
-      Adelante();
-    } else {
-      state = RETROCEDIENDO;
-    }
-    break;
-  case RETROCEDIENDO:
-    Atras();
-    delay(1000);
-    retroCounter++;
-    if (retroCounter == 1) {
-      state = ESCANEANDO;
-      retroCounter = 0;
-    }
-    break;
-  case DETENIDO:
-    Detener();
-    break;
-  default:
-    break;
-  }
-
-  delay(10);
-}
+void loop() {}
