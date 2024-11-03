@@ -1,6 +1,7 @@
 #include <ArduinoOTA.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include "driver/mcpwm.h"
 
 // ----- Credenciales de WiFi -----
 const char *ssid = "WIFI-QM";      // Network SSID
@@ -20,6 +21,7 @@ const char *password = "159Retys"; // Network Password
 const float SPEED_OF_SOUND = 0.0343; // cm/µs
 const int MAX_DISTANCE = 200;        // Max distance to detect in cm
 const int OBSTACLE_THRESHOLD = 60;   // Threshold to stop the vehicle in cm
+#define frecuencia      10000 
 
 // ----- Pin del Sensor Infrarrojo -----
 #define INFRARED 32
@@ -40,8 +42,8 @@ int retroCounter = 0;
 WebServer server(80); // Create a web server on port 80
 
 // ----- Declaracion de Funciones -----
-void Adelante();
-void Atras();
+void Adelante(float velocidad);
+void Atras(float velocidad);
 void Derecha();
 void Izquierda();
 void GirarEnElLugar();
@@ -54,6 +56,9 @@ void handleColor();
 float getDistance();
 void stateMachineTask(void *parameter);
 void webServerTask(void *parameter);
+void controlMotorAvanzar(mcpwm_unit_t mcpwm_num, mcpwm_timer_t timer_num , float duty_cycle);
+void controlMotorRetroceder(mcpwm_unit_t mcpwm_num, mcpwm_timer_t timer_num , float duty_cycle);
+int estado;
 
 void setup() {
   Serial.begin(115200);
@@ -114,6 +119,25 @@ void setup() {
   digitalWrite(TRIG, LOW);
   delayMicroseconds(2);
 
+  estado = DETENIDO; // 
+  mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, B1A); //inicializacion de los puertos a usar para pwm
+  mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0B, B2A);
+  
+  mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM1A, A1B);
+  mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM1B, A1A);
+
+  mcpwm_config_t pwm_config0; //estructura para configurar las unidades de PWM0
+  pwm_config0.frequency = frecuencia;
+  pwm_config0.cmpr_a = 0;
+  pwm_config0.cmpr_b = 0;
+  pwm_config0.counter_mode = MCPWM_UP_COUNTER;
+  pwm_config0.duty_mode = MCPWM_DUTY_MODE_0;
+  mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &pwm_config0); //aplicar configuracion, se repitio 2 veces uno para cada unidad
+  mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_1, &pwm_config0); //aplicar configuracion, se repitio 2 veces uno para cada unidad
+  
+  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_0, 0.0);
+  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_1, 0.0);
+
   // Set up web server routes
   server.on("/", handleRoot);
   server.on("/iniciar", handleIniciar);
@@ -137,46 +161,53 @@ void loop() {
 }
 
 // Motor control functions
-void Adelante() {
-  digitalWrite(B1A, LOW);
-  digitalWrite(B2A, HIGH);
-  digitalWrite(A1B, LOW);
-  digitalWrite(A1A, HIGH);
+void Adelante(float velocidad) {
+  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_0, velocidad);
+  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_1, velocidad);
 }
 
-void Atras() {
-  digitalWrite(B1A, HIGH);
-  digitalWrite(B2A, LOW);
-  digitalWrite(A1B, HIGH);
-  digitalWrite(A1A, LOW);
+void Atras(float velocidad) {
+  controlMotorRetroceder(MCPWM_UNIT_0, MCPWM_TIMER_0, velocidad);
+  controlMotorRetroceder(MCPWM_UNIT_0, MCPWM_TIMER_1, velocidad);
 }
 
 void Derecha() {
-  digitalWrite(B1A, LOW);
-  digitalWrite(B2A, LOW);
-  digitalWrite(A1B, LOW);
-  digitalWrite(A1A, HIGH);
+  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_0, 98.0);
+  controlMotorRetroceder(MCPWM_UNIT_0, MCPWM_TIMER_1, 98.0);
 }
 
 void Izquierda() {
-  digitalWrite(B1A, LOW);
-  digitalWrite(B2A, HIGH);
-  digitalWrite(A1B, LOW);
-  digitalWrite(A1A, LOW);
+  controlMotorRetroceder(MCPWM_UNIT_0, MCPWM_TIMER_0, 98.0);
+  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_1, 98.0);
 }
 
 void Detener() {
-  digitalWrite(B1A, LOW);
-  digitalWrite(B2A, LOW);
-  digitalWrite(A1B, LOW);
-  digitalWrite(A1A, LOW);
+  controlMotorRetroceder(MCPWM_UNIT_0, MCPWM_TIMER_0, 0.0);
+  controlMotorRetroceder(MCPWM_UNIT_0, MCPWM_TIMER_1, 0.0);
+  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_1, 0.0);
+  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_0, 0.0);
 }
 
 void GirarEnElLugar() {
-  digitalWrite(B1A, LOW);
-  digitalWrite(B2A, HIGH);
-  digitalWrite(A1B, HIGH);
-  digitalWrite(A1A, LOW);
+  controlMotorRetroceder(MCPWM_UNIT_0, MCPWM_TIMER_0, 10.0);
+  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_1, 20.0);
+}
+
+void controlMotorAvanzar(mcpwm_unit_t mcpwm_num, mcpwm_timer_t timer_num , float duty_cycle)
+{
+
+  mcpwm_set_duty(mcpwm_num, timer_num, MCPWM_OPR_A, duty_cycle);  //define que salida A de la unidad sea un pwm
+  mcpwm_set_duty_type(mcpwm_num, timer_num, MCPWM_OPR_A, MCPWM_DUTY_MODE_0); //configura tipo de duty
+  mcpwm_set_duty(mcpwm_num, timer_num, MCPWM_OPR_B, 0);  //define que salida A de la unidad sea un pwm
+  mcpwm_set_duty_type(mcpwm_num, timer_num, MCPWM_OPR_B, MCPWM_DUTY_MODE_0); //configura tipo de duty
+}
+
+void controlMotorRetroceder(mcpwm_unit_t mcpwm_num, mcpwm_timer_t timer_num , float duty_cycle)
+{
+  mcpwm_set_duty(mcpwm_num, timer_num, MCPWM_OPR_A, 0);  //define que salida A de la unidad sea un pwm
+  mcpwm_set_duty_type(mcpwm_num, timer_num, MCPWM_OPR_A, MCPWM_DUTY_MODE_0); //configura tipo de duty
+  mcpwm_set_duty(mcpwm_num, timer_num, MCPWM_OPR_B, duty_cycle);  //define que salida A de la unidad sea un pwm
+  mcpwm_set_duty_type(mcpwm_num, timer_num, MCPWM_OPR_B, MCPWM_DUTY_MODE_0); //configura tipo de duty
 }
 
 void handleRoot() {
@@ -393,13 +424,13 @@ void stateMachineTask(void *parameter) {
       break;
     case AVANZANDO:
       if (!color) {
-        Adelante();
+        Adelante(98.0);
       } else {
         state = RETROCEDIENDO;
       }
       break;
     case RETROCEDIENDO:
-      Atras();
+      Atras(98.0);
       delay(1000);
       retroCounter++;
       if (retroCounter == 2) {
