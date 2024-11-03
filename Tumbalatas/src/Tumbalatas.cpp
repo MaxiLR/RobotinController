@@ -1,6 +1,7 @@
 #include "driver/mcpwm.h"
 #include <ArduinoOTA.h>
 #include <WebServer.h>
+#include <WebSocketsServer.h> // Incluir la biblioteca WebSocketsServer
 #include <WiFi.h>
 
 // ----- Credenciales de WiFi -----
@@ -34,18 +35,17 @@ const int COLOR_THRESHOLD = 50;
 #define RIGHT_PI 23
 
 // ----- Estados del Tumbalatas -----
-#define ESCANEANDO 0
-#define AVANZANDO 1
-#define RETROCEDIENDO 2
-#define DETENIDO 3
+enum States { ESCANEANDO, AVANZANDO, RETROCEDIENDO, DETENIDO };
 
 // ----- Inicializacion de Variables Globales -----
 float distance = OBSTACLE_THRESHOLD + 1;
 bool color = false;
-int state = DETENIDO;
+States state = States::DETENIDO;
 int retroCounter = 0;
 
-WebServer server(80); // Create a web server on port 80
+WebServer server(80); // Crear un servidor web en el puerto 80
+WebSocketsServer webSocket =
+    WebSocketsServer(81); // Crear un servidor WebSocket en el puerto 81
 
 // ----- Declaracion de Funciones -----
 void Adelante(float left_speed, float right_speed);
@@ -61,15 +61,18 @@ void handleColor();
 float getDistance();
 void stateMachineTask(void *parameter);
 void webServerTask(void *parameter);
+void webSocketTask(void *parameter); // Nueva función para manejar WebSocket
 void controlMotorAvanzar(mcpwm_unit_t mcpwm_num, mcpwm_timer_t timer_num,
                          float duty_cycle);
 void controlMotorRetroceder(mcpwm_unit_t mcpwm_num, mcpwm_timer_t timer_num,
                             float duty_cycle);
+void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t *payload,
+                      size_t length);
 
 void setup() {
   Serial.begin(115200);
 
-  // Connect to Wi-Fi
+  // Conectar a Wi-Fi
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
@@ -79,13 +82,13 @@ void setup() {
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
 
-  // OTA setup
+  // Configuración OTA
   ArduinoOTA.onStart([]() {
     String type;
     if (ArduinoOTA.getCommand() == U_FLASH) {
-      type = "sketch"; // Update sketch
+      type = "sketch"; // Actualizar sketch
     } else {
-      type = "filesystem"; // Update SPIFFS
+      type = "filesystem"; // Actualizar SPIFFS
     }
     Serial.println("Start updating " + type);
   });
@@ -111,9 +114,9 @@ void setup() {
     }
   });
 
-  ArduinoOTA.begin(); // Initialize OTA
+  ArduinoOTA.begin(); // Inicializar OTA
 
-  // Set up motor pins
+  // Configurar pines de motores
   pinMode(A1A, OUTPUT);
   pinMode(A1B, OUTPUT);
   pinMode(B1A, OUTPUT);
@@ -146,26 +149,28 @@ void setup() {
   controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_1, 0.0);
   controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_0, 0.0);
 
-  // Set up web server routes
   server.on("/", handleRoot);
   server.on("/iniciar", handleIniciar);
   server.on("/detener", handleDetener);
-  server.on("/distance", handleDistance);
-  server.on("/color", handleColor);
 
   server.onNotFound([]() { server.send(404, "text/plain", "404: Not Found"); });
 
-  server.begin(); // Start the server
+  server.begin(); // Iniciar el servidor
   Serial.println("Server started");
 
-  // Create tasks
+  // Iniciar el servidor WebSocket
+  webSocket.begin();
+  webSocket.onEvent(onWebSocketEvent);
+  Serial.println("WebSocket server started on port 81");
+
+  // Crear tareas
   xTaskCreate(webServerTask, "WebServerTask", 2048, NULL, 1, NULL);
-  xTaskCreate(stateMachineTask, "StateMachineTask", 2048, NULL, 1, NULL);
+  xTaskCreate(stateMachineTask, "StateMachineTask", 4096, NULL, 1, NULL);
 }
 
 void loop() {
-  ArduinoOTA.handle();   // Handle OTA requests
-  server.handleClient(); // Handle incoming client requests
+  ArduinoOTA.handle();
+  webSocket.loop();
 }
 
 void Adelante(float left_speed, float right_speed) {
@@ -218,7 +223,8 @@ void handleRoot() {
       "<html lang='es'>"
       "<head>"
       "<meta charset='UTF-8'>"
-      "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+      "<meta name='viewport' content='width=device-width, "
+      "initial-scale=1.0'>"
       "<title>Control de Auto</title>"
       "<style>"
       "body {"
@@ -324,40 +330,55 @@ void handleRoot() {
       "  </div>"
       "</div>"
       "<script>"
+      "let socket = new WebSocket('ws://' + window.location.hostname + "
+      "':81/');"
+      "socket.onopen = function(event) {"
+      "  console.log('WebSocket conectado');"
+      "};"
+      "socket.onmessage = function(event) {"
+      "  let data = JSON.parse(event.data);"
+      "  if (data.distance !== undefined) {"
+      "    document.getElementById('distance').innerText = data.distance;"
+      "  }"
+      "  if (data.color !== undefined) {"
+      "    document.getElementById('color').innerText = data.color ? "
+      "'Blanco' : 'Negro';"
+      "  }"
+      "  if (data.status !== undefined) {"
+      "    switch (data.status) {"
+      "      case 0:"
+      "        document.getElementById('status').innerText = 'ESCANEANDO';"
+      "        break;"
+      "      case 1:"
+      "        document.getElementById('status').innerText = 'AVANZANDO';"
+      "        break;"
+      "      case 2:"
+      "        document.getElementById('status').innerText = 'RETROCEDIENDO';"
+      "        break;"
+      "      case 3:"
+      "        document.getElementById('status').innerText = 'DETENIDO';"
+      "        break;"
+      "    }"
+      "  }"
+      "};"
+      "socket.onclose = function(event) {"
+      "  console.log('WebSocket desconectado');"
+      "};"
+      "socket.onerror = function(error) {"
+      "  console.error('WebSocket Error: ', error);"
+      "};"
       "function iniciar() {"
       "  fetch('/iniciar').then(response => response.text()).then(data => {"
-      "    document.getElementById('status').innerText = data;"
       "  }).catch(error => {"
-      "    document.getElementById('status').innerText = 'Error al iniciar.';"
       "    console.error('Error:', error);"
       "  });"
       "} "
       "function detener() {"
       "  fetch('/detener').then(response => response.text()).then(data => {"
-      "    document.getElementById('status').innerText = data;"
       "  }).catch(error => {"
-      "    document.getElementById('status').innerText = 'Error al detener.';"
       "    console.error('Error:', error);"
       "  });"
       "} "
-      "function updateDistance() {"
-      "  fetch('/distance').then(response => response.text()).then(data => {"
-      "    document.getElementById('distance').innerText = data;"
-      "  }).catch(error => {"
-      "    document.getElementById('distance').innerText = '--';"
-      "    console.error('Error:', error);"
-      "  });"
-      "} "
-      "function updateColor() {"
-      "  fetch('/color').then(response => response.text()).then(data => {"
-      "    document.getElementById('color').innerText = data;"
-      "  }).catch(error => {"
-      "    document.getElementById('color').innerText = '--';"
-      "    console.error('Error:', error);"
-      "  });"
-      "} "
-      "setInterval(updateDistance, 1000);"
-      "setInterval(updateColor, 1000);"
       "</script>"
       "</body>"
       "</html>");
@@ -399,7 +420,7 @@ float getDistance() {
 void webServerTask(void *parameter) {
   while (true) {
     server.handleClient();
-    delay(10); // Avoid high CPU usage
+    delay(10); // Evitar uso alto de CPU
   }
 }
 
@@ -409,21 +430,21 @@ void stateMachineTask(void *parameter) {
     color = analogRead(INFRARED) <= COLOR_THRESHOLD ? 1 : 0;
 
     switch (state) {
-    case ESCANEANDO:
+    case States::ESCANEANDO:
       if (distance <= OBSTACLE_THRESHOLD) {
         state = AVANZANDO;
       } else {
         Izquierda(98.0, 98.0);
       }
       break;
-    case AVANZANDO:
+    case States::AVANZANDO:
       if (!color) {
         Adelante(98.0, 98.0);
       } else {
         state = RETROCEDIENDO;
       }
       break;
-    case RETROCEDIENDO:
+    case States::RETROCEDIENDO:
       Atras(98.0, 98.0);
       delay(1000);
       retroCounter++;
@@ -432,16 +453,41 @@ void stateMachineTask(void *parameter) {
         retroCounter = 0;
       }
       break;
-    case DETENIDO:
+    case States::DETENIDO:
       Detener();
       break;
     default:
       break;
     }
 
-    delay(10);
+    // Enviar datos a través de WebSocket
+    String json = "{";
+    json += "\"distance\":" + String(distance) + ",";
+    json += "\"color\":" + String(color ? "true" : "false") + ",";
+    json += "\"status\":" + String(state);
+    json += "}";
+
+    webSocket.broadcastTXT(json);
+
+    delay(500); // Ajusta el intervalo según tus necesidades
   }
 }
 
-// TODO: Make threads independant
-// TODO: Scan sleep before moving forward
+void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t *payload,
+                      size_t length) {
+  switch (type) {
+  case WStype_DISCONNECTED:
+    Serial.printf("WebSocket client #%u disconnected\n", num);
+    break;
+  case WStype_CONNECTED: {
+    IPAddress ip = webSocket.remoteIP(num);
+    Serial.printf("WebSocket client #%u connected from %d.%d.%d.%d\n", num,
+                  ip[0], ip[1], ip[2], ip[3]);
+    break;
+  }
+  case WStype_TEXT:
+    Serial.printf("WebSocket message from #%u: %s\n", num, payload);
+    // Puedes manejar mensajes entrantes si es necesario
+    break;
+  }
+}
