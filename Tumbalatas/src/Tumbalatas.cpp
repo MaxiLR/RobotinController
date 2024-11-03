@@ -30,7 +30,7 @@ const int OBSTACLE_THRESHOLD = 60;   // Threshold to stop the vehicle in cm
 #define INFRARED 32
 const int COLOR_THRESHOLD = 50;
 
-// ----- Pines del PID -----
+// ----- Pines del Encoder -----
 #define LEFT_PI 13
 #define RIGHT_PI 23
 
@@ -43,10 +43,25 @@ bool color = false;
 int retroCounter = 0;
 States state = States::DETENIDO;
 
+// ----- Variables para Encoders -----
+volatile unsigned long leftPulseCount = 0;
+volatile unsigned long rightPulseCount = 0;
+
+// ----- Variables para Velocidad -----
+float leftRPM = 0.0;
+float rightRPM = 0.0;
+
+// ----- Configuración del Tiempo para Cálculo de Velocidad -----
+const unsigned long speedInterval = 1000;
+unsigned long lastSpeedTime = 0;
+
+// ----- Configuración del Encoder -----
+const int pulsesPerRevolution = 100;
+const int countsPerRevolution = pulsesPerRevolution;
+
 // ----- Declaracion de Objetos -----
-WebServer server(80); // Crear un servidor web en el puerto 80
-WebSocketsServer webSocket =
-    WebSocketsServer(81); // Crear un servidor WebSocket en el puerto 81
+WebServer server(80);
+WebSocketsServer webSocket = WebSocketsServer(81);
 
 // ----- Declaracion de Funciones -----
 void Adelante(float left_speed, float right_speed);
@@ -69,6 +84,11 @@ void controlMotorRetroceder(mcpwm_unit_t mcpwm_num, mcpwm_timer_t timer_num,
                             float duty_cycle);
 void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t *payload,
                       size_t length);
+
+// ----- Rutinas de Interrupción -----
+void IRAM_ATTR handleLeftEncoder() { leftPulseCount++; }
+
+void IRAM_ATTR handleRightEncoder() { rightPulseCount++; }
 
 void setup() {
   Serial.begin(115200);
@@ -126,12 +146,12 @@ void setup() {
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
 
-  pinMode(RIGHT_PI, INPUT);
-  pinMode(LEFT_PI, INPUT);
+  pinMode(INFRARED, INPUT);
 
   digitalWrite(TRIG, LOW);
   delayMicroseconds(2);
 
+  // Inicializar MCPWM para los motores
   mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, B1A);
   mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0B, B2A);
 
@@ -150,6 +170,7 @@ void setup() {
   controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_1, 0.0);
   controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_0, 0.0);
 
+  // Configurar rutas del servidor web
   server.on("/", handleRoot);
   server.on("/iniciar", handleIniciar);
   server.on("/detener", handleDetener);
@@ -163,6 +184,14 @@ void setup() {
   webSocket.begin();
   webSocket.onEvent(onWebSocketEvent);
   Serial.println("WebSocket server started on port 81");
+
+  // Configurar pines de los encoders
+  pinMode(LEFT_PI, INPUT_PULLUP);
+  pinMode(RIGHT_PI, INPUT_PULLUP);
+
+  // Adjuntar interrupciones
+  attachInterrupt(digitalPinToInterrupt(LEFT_PI), handleLeftEncoder, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(RIGHT_PI), handleRightEncoder, CHANGE);
 
   // Crear tareas
   xTaskCreate(webServerTask, "WebServerTask", 2048, NULL, 1, NULL);
@@ -196,15 +225,15 @@ void Izquierda(float left_speed, float right_speed) {
 }
 
 void Detener() {
+  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_1, 0.0);
+  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_0, 0.0);
   controlMotorRetroceder(MCPWM_UNIT_0, MCPWM_TIMER_1, 0.0);
   controlMotorRetroceder(MCPWM_UNIT_0, MCPWM_TIMER_0, 0.0);
-  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_0, 0.0);
-  controlMotorAvanzar(MCPWM_UNIT_0, MCPWM_TIMER_1, 0.0);
 }
 
 void controlMotorAvanzar(mcpwm_unit_t mcpwm_num, mcpwm_timer_t timer_num,
                          float duty_cycle) {
-  mcpwm_set_duty(mcpwm_num, timer_num, MCPWM_OPR_A, 0);
+  mcpwm_set_duty(mcpwm_num, timer_num, MCPWM_OPR_A, 0.0);
   mcpwm_set_duty_type(mcpwm_num, timer_num, MCPWM_OPR_A, MCPWM_DUTY_MODE_0);
   mcpwm_set_duty(mcpwm_num, timer_num, MCPWM_OPR_B, duty_cycle);
   mcpwm_set_duty_type(mcpwm_num, timer_num, MCPWM_OPR_B, MCPWM_DUTY_MODE_0);
@@ -214,7 +243,7 @@ void controlMotorRetroceder(mcpwm_unit_t mcpwm_num, mcpwm_timer_t timer_num,
                             float duty_cycle) {
   mcpwm_set_duty(mcpwm_num, timer_num, MCPWM_OPR_A, duty_cycle);
   mcpwm_set_duty_type(mcpwm_num, timer_num, MCPWM_OPR_A, MCPWM_DUTY_MODE_0);
-  mcpwm_set_duty(mcpwm_num, timer_num, MCPWM_OPR_B, 0);
+  mcpwm_set_duty(mcpwm_num, timer_num, MCPWM_OPR_B, 0.0);
   mcpwm_set_duty_type(mcpwm_num, timer_num, MCPWM_OPR_B, MCPWM_DUTY_MODE_0);
 }
 
@@ -225,8 +254,7 @@ void handleRoot() {
       "<html lang='es'>"
       "<head>"
       "<meta charset='UTF-8'>"
-      "<meta name='viewport' content='width=device-width, "
-      "initial-scale=1.0'>"
+      "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
       "<title>Control de Auto</title>"
       "<style>"
       "body {"
@@ -286,7 +314,7 @@ void handleRoot() {
       "#detener-button:active {"
       "  background-color: #bd2130;"
       "}"
-      "#distance, #color {"
+      "#distance, #color, #leftRPM, #rightRPM {"
       "  font-size: 48px;"
       "  font-weight: bold;"
       "  margin-top: 20px;"
@@ -301,6 +329,7 @@ void handleRoot() {
       "  display: flex;"
       "  gap: 50px;"
       "  margin-top: 20px;"
+      "  flex-wrap: wrap;"
       "}"
       ".info-item {"
       "  display: flex;"
@@ -329,11 +358,18 @@ void handleRoot() {
       "      <p>Color:</p>"
       "      <span id='color'>--</span>"
       "    </div>"
+      "    <div class='info-item'>"
+      "      <p>Velocidad Izquierda:</p>"
+      "      <span id='leftRPM'>--</span> <span>RPM</span>"
+      "    </div>"
+      "    <div class='info-item'>"
+      "      <p>Velocidad Derecha:</p>"
+      "      <span id='rightRPM'>--</span> <span>RPM</span>"
+      "    </div>"
       "  </div>"
       "</div>"
       "<script>"
-      "let socket = new WebSocket('ws://' + window.location.hostname + "
-      "':81/');"
+      "let socket = new WebSocket('ws://' + window.location.hostname + ':81/');"
       "socket.onopen = function(event) {"
       "  console.log('WebSocket conectado');"
       "};"
@@ -343,8 +379,8 @@ void handleRoot() {
       "    document.getElementById('distance').innerText = data.distance;"
       "  }"
       "  if (data.color !== undefined) {"
-      "    document.getElementById('color').innerText = data.color ? "
-      "'Blanco' : 'Negro';"
+      "    document.getElementById('color').innerText = data.color ? 'Blanco' "
+      ": 'Negro';"
       "  }"
       "  if (data.status !== undefined) {"
       "    switch (data.status) {"
@@ -364,6 +400,14 @@ void handleRoot() {
       "        document.getElementById('status').innerText = 'VERIFICANDO';"
       "        break;"
       "    }"
+      "  }"
+      "  if (data.leftRPM !== undefined) {"
+      "    document.getElementById('leftRPM').innerText = "
+      "data.leftRPM.toFixed(2);"
+      "  }"
+      "  if (data.rightRPM !== undefined) {"
+      "    document.getElementById('rightRPM').innerText = "
+      "data.rightRPM.toFixed(2);"
       "  }"
       "};"
       "socket.onclose = function(event) {"
@@ -433,7 +477,32 @@ void readingsTask(void *parameter) {
   while (true) {
     distance = getDistance();
     color = analogRead(INFRARED) <= COLOR_THRESHOLD ? 1 : 0;
-    delay(100);
+
+    noInterrupts();
+    unsigned long leftPulses = leftPulseCount;
+    unsigned long rightPulses = rightPulseCount;
+    leftPulseCount = 0;
+    rightPulseCount = 0;
+    interrupts();
+
+    leftRPM =
+        (leftPulses / (float)countsPerRevolution) * (60000.0 / speedInterval);
+    rightRPM =
+        (rightPulses / (float)countsPerRevolution) * (60000.0 / speedInterval);
+
+    Serial.printf("Left RPM: %.2f, Right RPM: %.2f\n", leftRPM, rightRPM);
+
+    String json = "{";
+    json += "\"distance\":" + String(distance) + ",";
+    json += "\"color\":" + String(color ? "true" : "false") + ",";
+    json += "\"status\":" + String(state) + ",";
+    json += "\"leftRPM\":" + String(leftRPM, 2) + ",";
+    json += "\"rightRPM\":" + String(rightRPM, 2);
+    json += "}";
+
+    webSocket.broadcastTXT(json);
+
+    delay(speedInterval);
   }
 }
 
@@ -479,15 +548,7 @@ void stateMachineTask(void *parameter) {
       break;
     }
 
-    String json = "{";
-    json += "\"distance\":" + String(distance) + ",";
-    json += "\"color\":" + String(color ? "true" : "false") + ",";
-    json += "\"status\":" + String(state);
-    json += "}";
-
-    webSocket.broadcastTXT(json);
-
-    delay(10);
+    delay(100);
   }
 }
 
