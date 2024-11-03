@@ -420,7 +420,7 @@ float getDistance() {
 void webServerTask(void *parameter) {
   while (true) {
     server.handleClient();
-    delay(10); // Evitar uso alto de CPU
+    delay(100);
   }
 }
 
@@ -460,7 +460,6 @@ void stateMachineTask(void *parameter) {
       break;
     }
 
-    // Enviar datos a través de WebSocket
     String json = "{";
     json += "\"distance\":" + String(distance) + ",";
     json += "\"color\":" + String(color ? "true" : "false") + ",";
@@ -469,7 +468,7 @@ void stateMachineTask(void *parameter) {
 
     webSocket.broadcastTXT(json);
 
-    delay(500); // Ajusta el intervalo según tus necesidades
+    delay(10);
   }
 }
 
