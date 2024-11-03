@@ -35,14 +35,15 @@ const int COLOR_THRESHOLD = 50;
 #define RIGHT_PI 23
 
 // ----- Estados del Tumbalatas -----
-enum States { ESCANEANDO, AVANZANDO, RETROCEDIENDO, DETENIDO };
+enum States { ESCANEANDO, AVANZANDO, RETROCEDIENDO, DETENIDO, VERIFICANDO };
 
 // ----- Inicializacion de Variables Globales -----
 float distance = OBSTACLE_THRESHOLD + 1;
 bool color = false;
-States state = States::DETENIDO;
 int retroCounter = 0;
+States state = States::DETENIDO;
 
+// ----- Declaracion de Objetos -----
 WebServer server(80); // Crear un servidor web en el puerto 80
 WebSocketsServer webSocket =
     WebSocketsServer(81); // Crear un servidor WebSocket en el puerto 81
@@ -61,7 +62,7 @@ void handleColor();
 float getDistance();
 void stateMachineTask(void *parameter);
 void webServerTask(void *parameter);
-void webSocketTask(void *parameter); // Nueva función para manejar WebSocket
+void readingsTask(void *parameter);
 void controlMotorAvanzar(mcpwm_unit_t mcpwm_num, mcpwm_timer_t timer_num,
                          float duty_cycle);
 void controlMotorRetroceder(mcpwm_unit_t mcpwm_num, mcpwm_timer_t timer_num,
@@ -166,6 +167,7 @@ void setup() {
   // Crear tareas
   xTaskCreate(webServerTask, "WebServerTask", 2048, NULL, 1, NULL);
   xTaskCreate(stateMachineTask, "StateMachineTask", 4096, NULL, 1, NULL);
+  xTaskCreate(readingsTask, "ReadingsTask", 4096, NULL, 1, NULL);
 }
 
 void loop() {
@@ -262,7 +264,7 @@ void handleRoot() {
       "  transition: background-color 0.3s;"
       "}"
       "#iniciar-button:hover {"
-      "  background-color: #218838;"
+      "  background-color: #219838;"
       "}"
       "#iniciar-button:active {"
       "  background-color: #1e7e34;"
@@ -358,6 +360,9 @@ void handleRoot() {
       "      case 3:"
       "        document.getElementById('status').innerText = 'DETENIDO';"
       "        break;"
+      "      case 4:"
+      "        document.getElementById('status').innerText = 'VERIFICANDO';"
+      "        break;"
       "    }"
       "  }"
       "};"
@@ -424,24 +429,29 @@ void webServerTask(void *parameter) {
   }
 }
 
-void stateMachineTask(void *parameter) {
+void readingsTask(void *parameter) {
   while (true) {
     distance = getDistance();
     color = analogRead(INFRARED) <= COLOR_THRESHOLD ? 1 : 0;
+    delay(100);
+  }
+}
 
+void stateMachineTask(void *parameter) {
+  while (true) {
     switch (state) {
     case States::ESCANEANDO:
       if (distance <= OBSTACLE_THRESHOLD) {
-        state = AVANZANDO;
+        state = VERIFICANDO;
       } else {
-        Izquierda(98.0, 98.0);
+        Derecha(98.0, 98.0);
       }
       break;
     case States::AVANZANDO:
-      if (!color) {
-        Adelante(98.0, 98.0);
-      } else {
+      if (color) {
         state = RETROCEDIENDO;
+      } else {
+        Adelante(98.0, 98.0);
       }
       break;
     case States::RETROCEDIENDO:
@@ -451,6 +461,15 @@ void stateMachineTask(void *parameter) {
       if (retroCounter == 2) {
         state = ESCANEANDO;
         retroCounter = 0;
+      }
+      break;
+    case States::VERIFICANDO:
+      Detener();
+      delay(500);
+      if (distance <= OBSTACLE_THRESHOLD) {
+        state = AVANZANDO;
+      } else {
+        state = ESCANEANDO;
       }
       break;
     case States::DETENIDO:
@@ -486,7 +505,6 @@ void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t *payload,
   }
   case WStype_TEXT:
     Serial.printf("WebSocket message from #%u: %s\n", num, payload);
-    // Puedes manejar mensajes entrantes si es necesario
     break;
   }
 }
