@@ -5,8 +5,8 @@
 #include <WiFi.h>
 
 // ----- Credenciales de WiFi -----
-const char *ssid = "WIFI-QM";      // Network SSID
-const char *password = "159Retys"; // Network Password
+const char *ssid = "UCC-Libre";      // Network SSID
+const char *password = ""; // Network Password
 
 // ----- Pines de los Motores -----
 
@@ -52,7 +52,7 @@ float leftRPM = 0.0;
 float rightRPM = 0.0;
 
 // ----- Configuración del Tiempo para Cálculo de Velocidad -----
-const unsigned long speedInterval = 1000;
+const unsigned long speedInterval = 10;
 unsigned long lastSpeedTime = 0;
 
 // ----- Configuración del Encoder -----
