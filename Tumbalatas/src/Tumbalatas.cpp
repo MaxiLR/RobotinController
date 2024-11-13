@@ -5,8 +5,8 @@
 #include <WiFi.h>
 
 // ----- Credenciales de WiFi -----
-const char *ssid = "UCC-Libre";      // Network SSID
-const char *password = ""; // Network Password
+const char *ssid = "WIFI-QM";      // Network SSID
+const char *password = "159Retys"; // Network Password
 
 // ----- Pines de los Motores -----
 
@@ -476,6 +476,7 @@ void webServerTask(void *parameter) {
 void readingsTask(void *parameter) {
   while (true) {
     distance = getDistance();
+    printf("Color: %.2f cm\n", analogRead(INFRARED));
     color = analogRead(INFRARED) <= COLOR_THRESHOLD ? 1 : 0;
 
     noInterrupts();
@@ -520,11 +521,11 @@ void stateMachineTask(void *parameter) {
       if (color) {
         state = RETROCEDIENDO;
       } else {
-        Adelante(98.0, 98.0);
+        Adelante(98.0, 87.0);
       }
       break;
     case States::RETROCEDIENDO:
-      Atras(98.0, 98.0);
+      Atras(98.0, 87.0);
       delay(1000);
       retroCounter++;
       if (retroCounter == 2) {
@@ -548,7 +549,7 @@ void stateMachineTask(void *parameter) {
       break;
     }
 
-    delay(100);
+    delay(10);
   }
 }
 
