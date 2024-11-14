@@ -5,8 +5,8 @@
 #include <WiFi.h>
 
 // ----- Credenciales de WiFi -----
-const char *ssid = "WIFI-QM";      // Network SSID
-const char *password = "159Retys"; // Network Password
+const char *ssid = "Santi-ip";      // Network SSID
+const char *password = "10203040"; // Network Password
 
 // ----- Pines de los Motores -----
 
@@ -52,7 +52,7 @@ float leftRPM = 0.0;
 float rightRPM = 0.0;
 
 // ----- Configuración del Tiempo para Cálculo de Velocidad -----
-const unsigned long speedInterval = 10;
+const unsigned long speedInterval = 5;
 unsigned long lastSpeedTime = 0;
 
 // ----- Configuración del Encoder -----
@@ -469,7 +469,7 @@ float getDistance() {
 void webServerTask(void *parameter) {
   while (true) {
     server.handleClient();
-    delay(100);
+    delay(speedInterval);
   }
 }
 
@@ -521,14 +521,16 @@ void stateMachineTask(void *parameter) {
       if (color) {
         state = RETROCEDIENDO;
       } else {
-        Adelante(98.0, 87.0);
+        Adelante(98, 88.0);
       }
       break;
     case States::RETROCEDIENDO:
-      Atras(98.0, 87.0);
+      Atras(98.0, 88.0);
       delay(1000);
       retroCounter++;
       if (retroCounter == 2) {
+        Derecha(98.0, 98.0);
+        delay(100);
         state = ESCANEANDO;
         retroCounter = 0;
       }
@@ -549,7 +551,7 @@ void stateMachineTask(void *parameter) {
       break;
     }
 
-    delay(10);
+    delay(speedInterval);
   }
 }
 
